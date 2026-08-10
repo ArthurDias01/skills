@@ -1,0 +1,23 @@
+{
+  "skill_name": "ux-reviewer",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Review the UX of my app. I have onboarding, search, profile, and checkout screens.",
+      "expected_output": "The reviewer should not audit all screens immediately. It should require the user to select one primary screen or bounded feature before producing a UX verdict.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Assess the mobile checkout screen. Users choose delivery speed, enter payment details, and then see a final Place order button. The fastest shipping option is preselected and costs $18, while standard shipping is free. The design makes the free option gray and small because we want more people to pay for shipping.",
+      "expected_output": "A prioritized checkout review that evaluates the preselected paid default, flags potential manipulation/trust risk, proposes a transparent alternative, covers mobile interaction/accessibility implications, and includes a validation hypothesis.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Review the password reset feature on responsive web. Step 1 asks for email, step 2 asks for the verification code, step 3 asks for a new password. There is no progress indicator. If the code is wrong, the form clears both the code and email and returns to step 1.",
+      "expected_output": "A focused review of the password reset feature with severity-ranked findings, attention to recovery/state preservation, appropriate use of progress/goal-gradient reasoning without fabricated progress, accessibility considerations, and a single recommended next move.",
+      "files": []
+    }
+  ]
+}

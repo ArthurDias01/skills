@@ -1,0 +1,3 @@
+interface:
+  display_name: "UX Reviewer"
+  short_description: "Review a selected UI screen or feature for UX quality and behavioral design."
