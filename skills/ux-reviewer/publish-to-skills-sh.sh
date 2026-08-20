@@ -67,8 +67,9 @@ npx --yes skills add "${REPO_SLUG}" || {
   exit 1
 }
 
-echo "==> Also registering the individual skill path"
-npx --yes skills add "${REPO_SLUG}/ux-reviewer" || true
+echo "==> Also registering individual skill paths"
+npx --yes skills add "${REPO_SLUG}" --skill ux-reviewer || true
+npx --yes skills add "${REPO_SLUG}" --skill typescript-crap-score || true
 
 echo "==> Done. It can take a little time for the leaderboard/search index to reflect the new install(s)."
 echo "    Check: https://skills.sh/${REPO_SLUG}"

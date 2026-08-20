@@ -15,6 +15,7 @@ The repository will continue to evolve as I build skills around product design, 
 | Skill | What it does | Intent |
 | --- | --- | --- |
 | [UX Reviewer](./skills/ux-reviewer) | Reviews a selected mobile or frontend screen/feature and identifies UX problems, behavioral friction, accessibility issues, interaction problems, and opportunities for improvement. | Provide a structured UX critique that goes beyond visual polish and considers user psychology, usability, trust, product outcomes, and ethical design. |
+| [TypeScript CRAP Score](./skills/typescript-crap-score) | Calculates CRAP (Change Risk Anti-Patterns) scores for TypeScript functions from cyclomatic complexity and real coverage data. | Rank functions by combined complexity and under-testing so reviews, test work, and refactors hit the riskiest code first. |
 
 More skills will be added over time.
 
@@ -78,6 +79,22 @@ The reviewer will first establish the exact screen or feature being assessed bef
 
 ---
 
+# TypeScript CRAP Score
+
+`typescript-crap-score`
+
+Scores TypeScript functions with the CRAP (Change Risk Anti-Patterns) metric: cyclomatic complexity combined with real statement/branch coverage.
+
+Use it when you want to know which functions are risky because they are both complex and under-tested — not just because coverage is low.
+
+Install:
+
+```bash
+npx skills add ArthurDias01/skills --skill typescript-crap-score
+```
+
+---
+
 ## Repository Structure
 
 Each skill lives independently inside the `skills/` directory.
@@ -94,6 +111,9 @@ skills/
     │   ├── agents/
     │   ├── references/
     │   └── evals/
+    │
+    ├── typescript-crap-score/
+    │   └── SKILL.md
     │
     ├── future-skill/
     │   └── ...
