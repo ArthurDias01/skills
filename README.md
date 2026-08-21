@@ -15,7 +15,7 @@ The repository will continue to evolve as I build skills around product design, 
 | Skill | What it does | Intent |
 | --- | --- | --- |
 | [UX Reviewer](./skills/ux-reviewer) | Reviews a selected mobile or frontend screen/feature and identifies UX problems, behavioral friction, accessibility issues, interaction problems, and opportunities for improvement. | Provide a structured UX critique that goes beyond visual polish and considers user psychology, usability, trust, product outcomes, and ethical design. |
-| [TypeScript CRAP Score](./skills/typescript-crap-score) | Calculates CRAP (Change Risk Anti-Patterns) scores for TypeScript functions from cyclomatic complexity and real coverage data. | Rank functions by combined complexity and under-testing so reviews, test work, and refactors hit the riskiest code first. |
+| [TypeScript CRAP Score](./skills/typescript-crap-score) | Scores new TypeScript, TSX, and JSX functions on the current branch for CRAP, complexity, and arity. Writes nothing into the repo. | Keep new functions simple: at most 4 arguments, low complexity, no leftover coverage artifacts. |
 
 More skills will be added over time.
 
@@ -83,9 +83,9 @@ The reviewer will first establish the exact screen or feature being assessed bef
 
 `typescript-crap-score`
 
-Scores TypeScript functions with the CRAP (Change Risk Anti-Patterns) metric: cyclomatic complexity combined with real statement/branch coverage.
+Scores **new functions on the current git branch** (TypeScript, TSX, JSX). Checks CRAP when coverage can be collected without dirtying the tree, cyclomatic complexity, and arity (max 4 arguments).
 
-Use it when you want to know which functions are risky because they are both complex and under-tested — not just because coverage is low.
+It reports in the chat. It does not write coverage folders, score files, or other artifacts into the project.
 
 Install:
 

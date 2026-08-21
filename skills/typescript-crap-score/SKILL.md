@@ -1,155 +1,81 @@
 ---
 name: typescript-crap-score
-description: Calculate CRAP (Change Risk Anti-Patterns) scores for TypeScript functions to find code that is both complex and under-tested. Use on code reviews, when assessing risky functions, prioritizing tests, or refactoring high-complexity code into simpler pieces.
+description: Score new TypeScript, TSX, and JSX functions on the current git branch for CRAP risk, cyclomatic complexity, and arity. Use when reviewing a branch, checking newly implemented functions, flagging functions with more than 4 arguments, or deciding what to simplify before merge.
 ---
 
-# CRAP Score Analysis for TypeScript
+# Branch CRAP check for TypeScript
 
-Calculate CRAP scores for TypeScript functions to spot code that is both complex and undertested.
+Score **new functions on the current branch**. Goal is readable, maintainable code. Do not leave files, reports, or coverage output in the repo.
 
-## Background
+## Scope
 
-The CRAP score combines cyclomatic complexity and code coverage into one number:
+1. Find the merge base with the default branch (`main` or `master`).
+2. Diff `*.ts`, `*.tsx`, `*.jsx` against that base. Skip `*.d.ts`, generated code, and build output.
+3. Score only functions that are **added** on this branch (new declarations, new methods, new arrow functions, new React components). Skip untouched functions. If an existing function grew a lot, score it too and label it as changed, not new.
+4. If there is no git repo or no function-level diff, stop and say so. Do not walk the whole tree.
 
-$$\text{CRAP}(m) = \text{comp}(m)^2 \times (1 - \text{cov}(m))^3 + \text{comp}(m)$$
+## Do not pollute the workspace
 
-Where:
+Never write coverage, lcov, Istanbul JSON, HTML reports, score tables, or scratch files into the project. Never `git add` any of that.
 
-- $\text{comp}(m)$ = cyclomatic complexity of function $m$
-- $\text{cov}(m)$ = code coverage ratio (0.0 to 1.0) of function $m$
+If you run tests for coverage:
 
-| CRAP Score | Risk Level | Interpretation |
-|------------|------------|----------------|
-| < 5        | Low        | Simple and well-tested |
-| 5-15       | Moderate   | Acceptable for most code |
-| 15-30      | High       | Needs more tests or simplification |
-| > 30       | Critical   | Refactor and add coverage urgently |
+- Send output to a temp dir outside the repo (`mktemp -d` under `$TMPDIR`).
+- Point Jest/Vitest/c8/nyc `--coverageDirectory` (or equivalent) at that temp dir.
+- Delete the temp dir when you finish, including on failure.
+- Prefer an existing in-repo coverage file only if it is already there and current. Do not regenerate it in-place.
+- If coverage would dirty the working tree, skip coverage. Report complexity and arity anyway. Do not invent coverage. Do not publish a CRAP number without real coverage.
 
-A function with 100% coverage has CRAP equal to its complexity (the minimum). A function with 0% coverage has CRAP = complexity² + complexity.
+## Simplicity bar
 
-## When to Use
+A new function fails the bar if any of these hold:
 
-- User wants to assess which functions are risky because of low coverage and high complexity
-- User asks for CRAP score of specific functions, classes, modules, or files
-- User wants to prioritize which code to test next
-- User wants to evaluate test quality beyond plain coverage percentages
-- During code reviews when complexity looks high and tests may be thin
-- When refactoring complex TypeScript into simpler pieces guided by CRAP numbers
+| Check | Fail when |
+|-------|-----------|
+| Arity | More than 4 parameters. Count TS, TSX, and JSX the same. React props: one props object is 1 argument. Destructured props count as 1 if they are a single parameter. Rest + 4 named params is a fail. |
+| Complexity | Cyclomatic complexity > 8 |
+| CRAP | Score > 15 when coverage exists |
 
-## When Not to Use
+Prefer one object parameter over a long positional list. Prefer extracting a helper over nested branches. Prefer early returns over `else` chains.
 
-- User just wants to run tests (use the project's normal test command)
-- User wants to write new tests from scratch
-- User only wants a coverage percentage with no complexity analysis
+## Complexity
 
-## Inputs
+Base 1. Add 1 for each: `if`, `else if`, `case`, `for` / `for...of` / `for...in` / `for await`, `while`, `do...while`, `catch`, `&&`, `||`, `??`, ternary, `&&=` / `||=` / `??=`.
 
-| Input | Required | Description |
-|-------|----------|-------------|
-| Target scope | Yes | Function name, class name, module path, or file path to analyze |
-| Test command / coverage path | No | How to produce coverage data. Defaults to discovering the project's test runner and existing coverage files |
-| Source root | No | Path to the source under analysis (often `src/`) |
+Do not count optional chaining (`?.`). Score nested and arrow functions on their own bodies.
 
-## Workflow
-
-### Step 1: Collect code coverage data
-
-CRAP scores always need real coverage data. Never estimate or invent coverage numbers.
-
-Look first for an existing Istanbul-style report (`coverage/coverage-final.json`, `coverage/coverage-v8.json`, or similar). If none exists, or if it is stale, regenerate it.
-
-Common commands (run from project root):
-
-- Jest: `npx jest --coverage --coverageReporters=json --coverageDirectory=./coverage`
-- Vitest (v8 or istanbul provider): `npx vitest run --coverage`
-- c8 / nyc wrappers: whatever the repo already uses that emits Istanbul JSON or LCOV
-
-If the project already has a coverage script in `package.json`, prefer that. Search recursively for `coverage-final.json` or `lcov.info` under the results directory.
-
-If tests fail but still execute, use the coverage from the tests that ran and note the failures.
-
-If every collection path fails, report that coverage could not be collected, show the commands tried and their errors, and stop. You may still report raw complexity if it is useful, but never publish a CRAP number based on assumed coverage.
-
-### Step 2: Compute cyclomatic complexity
-
-Read the target source files and count decision points per function. Base complexity is 1. Each of the following adds 1:
-
-| Construct | Example |
-|-----------|---------|
-| if | `if (x > 0)` |
-| else if | `else if (y < 0)` |
-| case (each) | `case 1:` |
-| for / for...of / for...in / for await | `for (const item of list)` |
-| while | `while (running)` |
-| do...while | `do { } while (cond)` |
-| catch (each) | `catch (err)` |
-| && | `if (a && b)` |
-| \|\| | `if (a \|\| b)` |
-| ?? | `value ?? fallback` |
-| ternary | `x > 0 ? a : b` |
-| logical assignment | `a &&= b`, `a \|\|= b`, `a ??= b` |
-
-Optional chaining (`?.`) is usually not counted as a branch (matches common ESLint complexity behavior). Nested functions and arrow functions are scored on their own bodies. Report the breakdown of decision points for each function.
-
-### Step 3: Extract per-function coverage
-
-Parse the coverage report (prefer Istanbul `coverage-final.json`). For each function, take the statement coverage (or the minimum of statement and branch coverage when both are present).
-
-If only line-level data is available:
-
-$$\text{cov}(m) = \frac{\text{lines with hits} > 0}{\text{total lines}}$$
-
-Function names in coverage maps often differ from source (arrow functions, async, generators, class methods). Match by source location / line ranges when names do not line up.
-
-### Step 4: Calculate CRAP scores
-
-For each function in scope apply:
+## CRAP (only with real coverage)
 
 $$\text{CRAP}(m) = \text{comp}(m)^2 \times (1 - \text{cov}(m))^3 + \text{comp}(m)$$
 
-### Step 5: Present results
+`cov` is 0.0–1.0 from the coverage file (statement coverage, or min of statement and branch). Match functions by line range when names do not line up.
 
-Show a table sorted highest CRAP first:
+| CRAP | Band |
+|------|------|
+| < 5 | Low |
+| 5–15 | Moderate |
+| 15–30 | High |
+| > 30 | Critical |
 
-| Function | Complexity | Coverage | CRAP Score | Risk |
-|----------|------------|----------|------------|------|
-| OrderService.processOrder | 12 | 45% | 28.4 | High |
-| OrderService.validateItems | 8 | 90% | 8.1 | Moderate |
-| OrderService.calculateTotal | 3 | 100% | 3.0 | Low |
+100% coverage means CRAP equals complexity. Complexity ≥ 15 cannot get under CRAP 15 by tests alone. Split the function.
 
-Include:
+If coverage is missing, omit the CRAP column. Do not guess.
 
-- Summary: total functions analyzed, count in each risk band
-- Top offenders: functions with CRAP > 30, with concrete recommendations
-- Quick wins: high-complexity functions where a modest coverage increase would drop the score a lot
+## Output
 
-### Step 6: Provide actionable recommendations
+Reply in the conversation only. No files.
 
-For high-CRAP functions suggest one or both:
+Table, worst first:
 
-- Add tests — name the uncovered branches and sketch specific test cases
-- Reduce complexity — propose extract-function or early-return refactors for nested logic
+| Function | File | Args | Complexity | Coverage | CRAP | Verdict |
+|----------|------|------|------------|----------|------|---------|
+| `processOrder` | `src/orders.ts` | 6 | 11 | 40% | 27.4 | Fail: arity + CRAP |
+| `OrderCard` | `src/OrderCard.tsx` | 1 | 3 | — | — | Pass |
 
-Calculate the coverage needed to bring a function under CRAP 15:
+Then:
 
-$$\text{cov}_{\text{needed}} = 1 - \left(\frac{15 - \text{comp}}{\text{comp}^2}\right)^{1/3}$$
+- Count of new functions, how many fail, how many pass.
+- For each fail, say what to change (drop args, extract, flatten branches). Keep it specific to the source you read.
+- If coverage was skipped, say why (would dirty the tree / no runner).
 
-This only works when complexity < 15. When complexity ≥ 15 the lowest possible CRAP is the complexity itself, so coverage alone cannot get under the threshold. The function must be simplified first.
-
-Report it like: "To bring processOrder (complexity 12) under CRAP 15, raise coverage from 45% to at least 72%." For functions where complexity already exceeds the threshold: "complexMethod (complexity 18) cannot reach CRAP < 15 through testing alone — extract sub-functions first."
-
-## Validation
-
-- Confirm coverage data was collected successfully and the file contains real numbers
-- Every coverage figure must come from that file — no estimates, no guesses from comments
-- Cross-check function names or line ranges against the source
-- Spot-check the formula on at least one function by hand
-- A 100%-covered function must show CRAP exactly equal to its complexity
-
-## Common Pitfalls
-
-- Estimating coverage when collection fails. Never do it. Work the fallbacks, then report the blocker.
-- Trusting a stale `// complexity: 7` comment. Always recompute from current source.
-- Using an old coverage report. Always regenerate before scoring.
-- Name mismatches. Coverage maps mangle async, arrow, and class methods. Match by line range.
-- Generated files. Skip `*.d.ts`, build output, and auto-generated code unless the user explicitly asks for them.
+Do not "fix" the code unless the user asked. This skill reports.
