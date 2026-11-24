@@ -1,5 +1,5 @@
 ---
-name: postgres-mistakes
+name: review-postgres-mistakes
 description: >-
   Find and fix the Postgres patterns from Scott Mead's talk "The Postgres Mistakes We All Still Make" (shared by Neon on X), in app code, migrations, code reviews, or a live database: a JSONB column that grows on every event; a transaction held open across an HTTP, payment, email, or other network call ("idle in transaction"); a bulk DELETE retention job; unused indexes, or an index on a column every UPDATE changes; connecting per request, or a pool that runs out while the database sits idle; vacuum that cannot remove dead rows; WAL spikes or replica lag after a cleanup job; missing statement, lock, idle-in-transaction, or transaction timeouts. Also use it to decide whether an index is safe to drop. Do not use it for MySQL, general Postgres setup, hosting product questions, or query plan tuning outside these patterns.
 ---
