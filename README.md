@@ -16,6 +16,7 @@ The repository will continue to evolve as I build skills around product design, 
 | --- | --- | --- |
 | [UX Reviewer](./skills/ux-reviewer) | Reviews a selected mobile or frontend screen/feature and identifies UX problems, behavioral friction, accessibility issues, interaction problems, and opportunities for improvement. | Provide a structured UX critique that goes beyond visual polish and considers user psychology, usability, trust, product outcomes, and ethical design. |
 | [TypeScript CRAP Score](./skills/typescript-crap-score) | Scores new TypeScript, TSX, and JSX functions on the current branch for CRAP, complexity, and arity. Writes nothing into the repo. | Keep new functions simple: at most 4 arguments, low complexity, no leftover coverage artifacts. |
+| [Review Postgres Mistakes](./skills/review-postgres-mistakes) | Finds and fixes the Postgres mistakes from Scott Mead's talk (via Neon's X thread): growing JSONB documents, transactions left open during network calls, bulk DELETE instead of partitions, unused indexes, plus connection churn and missing timeouts. | Catch the patterns that quietly hold connections longer until the pool runs out, in code review or on a live database. |
 
 More skills will be added over time.
 
