@@ -1,0 +1,23 @@
+{
+  "skill_name": "postgres-mistakes",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "can you review this before I merge? it's our checkout endpoint (flask + psycopg2, postgres 16 on neon):\n\n```python\n@app.post('/orders/<int:oid>/pay')\ndef pay(oid):\n    conn = psycopg2.connect(DSN)\n    cur = conn.cursor()\n    cur.execute(\"SELECT amount, card_token FROM orders WHERE id = %s FOR UPDATE\", (oid,))\n    amount, card = cur.fetchone()\n    r = requests.post('https://api.stripe.com/v1/charges', data={'amount': amount, 'source': card}, auth=(KEY, ''))\n    r.raise_for_status()\n    cur.execute(\"UPDATE orders SET status='paid', updated_at=now() WHERE id=%s\", (oid,))\n    conn.commit()\n    conn.close()\n    return {'ok': True}\n```\n\nand the migration in the same PR:\n```sql\nCREATE INDEX orders_status_idx ON orders (status);\nCREATE INDEX orders_updated_at_idx ON orders (updated_at);\n```\nwe had pool exhaustion last black friday when stripe got slow, want to be sure this is fine",
+      "expected_output": "Flags the transaction held open across the Stripe call (FOR UPDATE then HTTP), explains idle in transaction / pool exhaustion while DB is idle, proposes charge-first with idempotency key and a guarded UPDATE WHERE status='pending', suggests per-role idle_in_transaction_session_timeout, flags connect() per request (use a pool), and questions the new indexes on columns every UPDATE changes (turns off HOT).",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "every night around 2am our read replica falls 20+ minutes behind and WAL volume spikes. the only thing running then is our retention cron: DELETE FROM audit_events WHERE created_at < now() - interval '90 days'; table is ~1.5B rows, pg 15 on RDS. also our users table keeps growing way faster than user count, we store a 'recent_logins' array inside users.profile jsonb and append on every login. what's going on and what should we change?",
+      "expected_output": "Explains bulk DELETE marks rows dead, one long transaction pins the horizon, WAL replayed on replicas; recommends range partitioning by created_at with DETACH PARTITION CONCURRENTLY + DROP (PG14+, not in txn block, default partition caveat), batched deletes until then; explains MVCC rewrite of whole jsonb document and growth/bloat, recommends a separate login table; gives detection queries (pg_stat_statements wal_bytes, n_dead_tup vs n_live_tup).",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "pg_stat_user_indexes says idx_accounts_balance has idx_scan = 0 and it's 4 GB. we upgraded and reset stats yesterday. there's also an analytics read replica. ok to just DROP INDEX idx_accounts_balance now? postgres 16.",
+      "expected_output": "Says not yet: zero counts only since stats_reset (yesterday is too short), each replica counts its own scans so check the replica, check pg_stat_statements and git history; save pg_get_indexdef first; use DROP INDEX CONCURRENTLY not plain DROP INDEX (ACCESS EXCLUSIVE); notes an index on a frequently updated balance blocks HOT, check HOT ratio; asks for user OK before running.",
+      "files": []
+    }
+  ]
+}
