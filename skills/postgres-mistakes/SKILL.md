@@ -1,14 +1,14 @@
 ---
 name: postgres-mistakes
 description: >-
-  Find and fix the Postgres mistakes from Scott Mead's talk "The Postgres Mistakes We All Still Make", summed up by Neon in an X thread: a JSONB document that grows on every event, a transaction left open during a network call, a large nightly retention DELETE instead of partitions, and indexes nobody reads, plus connection churn and missing timeouts. Use it when these patterns show up in Postgres code, a migration, or a code review, and when someone investigates table bloat, dead rows, "idle in transaction" sessions, a connection pool that runs out, vacuum that cannot keep up, replication lag or WAL spikes after a cleanup job, or UPDATEs that slowly get slower. Also use it to decide whether a Postgres index is safe to drop. Works for Neon, RDS, and any other Postgres host.
+  Find and fix the Postgres patterns from Scott Mead's talk "The Postgres Mistakes We All Still Make" (shared by Neon on X), in app code, migrations, code reviews, or a live database: a JSONB column that grows on every event; a transaction held open across an HTTP, payment, email, or other network call ("idle in transaction"); a bulk DELETE retention job; unused indexes, or an index on a column every UPDATE changes; connecting per request, or a pool that runs out while the database sits idle; vacuum that cannot remove dead rows; WAL spikes or replica lag after a cleanup job; missing statement, lock, idle-in-transaction, or transaction timeouts. Also use it to decide whether an index is safe to drop. Do not use it for MySQL, general Postgres setup, hosting product questions, or query plan tuning outside these patterns.
 ---
 
 # Postgres mistakes we all still make
 
 This skill comes from Scott Mead's talk at the NYC Postgres Meetup (November 18, 2026) and the Neon X thread that sums it up. Every source is listed in `references/sources.md`.
 
-The talk has one main idea. Each mistake makes a transaction slower or keeps it open longer, so each one holds a database connection longer. As connections stay busy, the pool can open more up to its limit, and then callers wait for one. Raising `max_connections` (the server's connection limit) hides this. Find the work or the wait that holds the connections, and make each transaction cheaper.
+The talk has one main idea. Each mistake makes a transaction slower or keeps it open longer, so each one holds a database connection longer. Busy connections fill the pool up to its limit. Callers then wait for a free connection. Raising `max_connections` (the server's connection limit) hides this. Find the work or the wait that holds the connections, and make each transaction cheaper.
 
 ## Words used in this skill
 
@@ -32,7 +32,7 @@ There are two jobs. Pick the one that fits the request.
    - The role needs `pg_monitor` (or `pg_read_all_stats`). Without it, other sessions' state, query text, and start time show as NULL. Then an empty result means nothing, so say the session checks were incomplete.
    - Run table and index checks in each database. The `pg_stat_user_*` views only cover the current one.
    - Most counters add up over time. Take two samples and compare them. `stats_reset` in `pg_stat_database` tells you when the database counters started. `pg_stat_statements` (the query statistics extension) has its own window.
-   - Check the Postgres version, and whether `pg_stat_statements` is installed. Some columns need PG 14, 16, or 17. The query file marks them.
+   - Check the Postgres version, and whether `pg_stat_statements` is installed. `wal_bytes` needs PG 13+. Some other columns need PG 14, 16, or 17. The query file marks them.
 
 The fixes change the database (DROP INDEX, ALTER ROLE, new partitions, VACUUM). Show the user the exact statement and get a yes before you run any of them.
 
@@ -49,7 +49,7 @@ UPDATE users
  WHERE id = 1;
 ```
 
-**Why it hurts**: every update writes the whole document again as a new row version. In the talk, changing 17 bytes rewrote all 688 bytes of the row. A document that only grows never fits in the space its last version freed, so the table grows instead. Readers step over the dead versions. The same query reads more pages and holds its connection longer, and the pool grows "months after the schema decision".
+**Why it hurts**: every update writes the whole document again as a new row version. In the talk, `profile || '{"theme": "light"}'` changed 17 bytes and still rewrote the whole 688-byte row. Each login appended about 24 bytes, so every version was bigger than the last. A document that only grows never fits in the space its last version freed, so the table grows instead. In the talk's one-year example, a reader stepped over 364 dead versions, and one user's row took 221 pages where one page should do. The same query reads more pages and holds its connection longer. Months after the schema choice, the pool opens more connections to keep up.
 
 **Fix**: facts that pile up go in their own table. Recording a login then leaves the users row alone.
 
@@ -63,7 +63,7 @@ CREATE TABLE login_history (
 INSERT INTO login_history (user_id) VALUES (1);
 ```
 
-A weaker fix, if you only need the latest value: overwrite one fixed-size field (for example `last_login`) instead of appending to a list. When each version is the same size, the space VACUUM frees can fit the next one. There is still one dead version per update, so VACUUM must keep up.
+A weaker fix, if you only need the latest value: overwrite one fixed-size field (for example `last_login`) instead of appending to a list. In the talk, every version is then the same 110 bytes, so the space VACUUM frees fits the next one. There is still one dead version per update, so VACUUM must keep up, and an open transaction still blocks that cleanup (Mistake 2).
 
 ## Mistake 2: leaving transactions open
 
@@ -81,11 +81,16 @@ Autocommit means each statement is its own transaction unless the app opens one 
 
 **Why it hurts**: while it waits, the transaction holds the row lock and an xid, and the session shows as "idle in transaction". The xid holds back cleanup on every table. When the API slows down, the waiting requests take every connection in the pool. The pool runs out while the database itself sits idle. Postgres cannot roll back an HTTP call anyway, so the lock never protected the charge.
 
-Other things hold back cleanup the same way, even when they only read: a report running for 40 minutes, a nightly batch in one transaction, `pg_dump`, and a prepared transaction nobody finished. A physical replication slot with `hot_standby_feedback` holds it back for every table. A logical slot nobody reads holds back cleanup of the system catalog and keeps WAL on disk.
+Other sessions hold back cleanup the same way. A report running for 40 minutes, or `pg_dump`, holds a snapshot even though it only reads. A nightly batch in one transaction holds an xid and a snapshot. A prepared transaction (the first half of a two-phase commit) that nobody finished holds it back until someone commits or rolls it back. A replication slot is the server's record of how far a replica or a change feed has read. A physical slot with `hot_standby_feedback` holds back cleanup on every table. A logical slot that nobody reads holds back cleanup of the system catalog and keeps WAL on disk.
 
-**Fix in the app**: turn autocommit on. Charge first, with no transaction open, and send an idempotency key (a stable request id the payment provider uses to stop a duplicate charge). Check that the provider says the charge worked. Then run one UPDATE that only changes a pending order. That status check replaces the row lock. Keep only SQL inside a transaction.
+**Fix in the app**: build the pool with autocommit on. Charge first, with no transaction open, and send an idempotency key (a stable request id the payment provider uses to stop a duplicate charge). Check that the provider says the charge worked. Then run one UPDATE that only changes a pending order. That status check replaces the row lock. Any other SQL goes in one short transaction with no network call inside it. The talk's version:
 
 ```python
+# the pool is built once at startup with autocommit on, for example
+# psycopg_pool.ConnectionPool(DSN, min_size=2, max_size=10, kwargs={"autocommit": True})
+conn = pool.getconn()
+
+# the charge runs with no transaction open
 resp = requests.post("https://api.payments-provider.com/v1/charges",
                      headers={"Idempotency-Key": f"order-{oid}"},
                      data={"amount": amount, "currency": "usd",
@@ -93,9 +98,16 @@ resp = requests.post("https://api.payments-provider.com/v1/charges",
 
 cur.execute("UPDATE orders SET status = 'paid' "
             "WHERE id = %s AND status = 'pending'", (oid,))
+
+# the only transaction. SQL only, milliseconds
+with conn.transaction():
+    cur.execute("INSERT INTO ledger ...")
+    cur.execute("UPDATE balances ...")
 ```
 
-If the UPDATE changes zero rows, the order was not pending. Look at its current state before you do anything else. A SQLSTATE is Postgres's error code. If a timeout ends the session (25P03 for the idle timeout, 25P04 for the transaction timeout), reconnect and retry the UPDATE. Never retry a charge that already went through.
+Return the connection to the pool (`putconn`) in a `finally` block.
+
+If a timeout ends the session, reconnect and retry the UPDATE, never the charge. The `status = 'pending'` check is what makes that retry safe: a second run changes nothing. Postgres reports each timeout with an error code (SQLSTATE): 57014 for `statement_timeout` and 55P03 for `lock_timeout` cancel the statement only, while 25P03 (idle in transaction) and 25P04 (transaction timeout) end the session.
 
 **Fix on the server**: these five timeouts all default to 0, which means a connection can be held forever: `statement_timeout`, `lock_timeout`, `idle_in_transaction_session_timeout`, `transaction_timeout` (PG 17), and `idle_session_timeout` (PG 14). Set them per role, because the app, the reports, and the migrations need different limits:
 
@@ -104,7 +116,7 @@ ALTER ROLE app_rw SET idle_in_transaction_session_timeout = '30s';
 ALTER ROLE app_rw SET transaction_timeout = '5min';   -- PG 17+
 ```
 
-Pick the number from your commit rate. At 300 commits a second, a 30-second wait lets 9,000 transactions commit while cleanup is held back. A pooler in transaction mode hands a server connection back to the pool after each transaction. Role settings still apply there, but a session-level `SET` does not survive the pool.
+Pick the number from your commit rate. At 300 commits a second, a 30-second wait lets 9,000 transactions commit while cleanup is held back. A pooler such as PgBouncer in transaction mode hands a server connection back to the pool after each transaction. Role settings still apply there. A session-level `SET` does not survive the pool (use `SET LOCAL`), and advisory locks and `LISTEN` break too.
 
 **Check**: run the "who holds the cleanup cutoff" query in `references/detection-queries.md`. In vacuum logs, "dead but not yet removable" with an old removable cutoff means something holds the cutoff back.
 
@@ -125,7 +137,8 @@ DELETE FROM events WHERE created_at < now() - interval '90 days';
 CREATE TABLE events_p (LIKE events INCLUDING DEFAULTS, PRIMARY KEY (id, created_at))
   PARTITION BY RANGE (created_at);
 CREATE TABLE events_p_2026_08 PARTITION OF events_p FOR VALUES FROM ('2026-08-01') TO ('2026-09-01');
--- one partition per month back to the retention edge, indexes on events_p; pg_partman keeps the calendar
+-- one partition per month back to the retention edge, indexes on events_p
+-- pg_partman (an extension that creates and drops partitions on a schedule) can keep the calendar
 INSERT INTO events_p SELECT * FROM events WHERE created_at >= '2026-08-01' AND created_at < '2026-09-01';   -- a month per batch
 SET lock_timeout = '2s';
 BEGIN; ALTER TABLE events RENAME TO events_old; ALTER TABLE events_p RENAME TO events; COMMIT;
@@ -136,7 +149,7 @@ DROP TABLE events_p_2026_08;
 ```
 
 This shows the pattern, not a full migration. When you adapt it:
-- Create every partition the kept data and new writes need, and the indexes, constraints, and anything else that depends on the table.
+- Create every partition back to the retention edge, plus partitions for new writes, and build the indexes on the new table.
 - The primary key becomes `(id, created_at)`. Check that this still gives the uniqueness the app needs.
 - Rows inserted, updated, or deleted after a batch was copied must reach the new table. Stop writes for the final copy and the swap, or capture the changes and apply them at the swap.
 - A partition can only be dropped when its whole range is past the cutoff. If the cutoff must be exact, pick partition sizes that fit it.
@@ -153,13 +166,13 @@ This shows the pattern, not a full migration. When you adapt it:
 **Why it hurts**: every index adds work to every INSERT and to every UPDATE that is not HOT. Indexing a column that every UPDATE changes turns HOT off for those updates, so each one writes index entries and leaves a dead tuple behind. In the talk's test on 1M rows, an UPDATE wrote 2 pages with only a primary key and 9 pages with seven extra indexes, and WAL per UPDATE went from 311 B to 855 B. At that size the UPDATE still took 0.2 ms, because everything was in memory. At larger sizes the indexes compete with the table for memory, and slower writes hold their connection longer.
 
 **Check before you drop anything**:
-1. Find indexes with zero scans (query in `references/detection-queries.md`). Skip unique, primary key, and constraint indexes.
+1. Find indexes with zero scans (query in `references/detection-queries.md`). Skip unique, primary key, and constraint indexes. The talk's slide flags zero scans with more than 100 MB on disk. Also look for invalid indexes left by a failed `CREATE INDEX CONCURRENTLY`: they are kept up to date on every write and never used.
 2. Zero counts only since `stats_reset`. A recent reset or a short window proves nothing. Cover rare jobs like monthly reports.
 3. Each replica counts its own scans. Check every node.
 4. Find who added it (`git log -S '<index name>'`) and look for queries that might use it in `pg_stat_statements`.
 5. Watch the HOT ratio, the share of updates that were HOT. `n_tup_hot_upd` under half of `n_tup_upd` means an indexed column is updated or the page is full. Compare two samples, since the counters add up.
 
-**Fix**: save the definition first, then drop it with `CONCURRENTLY`. A plain `DROP INDEX` takes an ACCESS EXCLUSIVE lock, which blocks all reads and writes on the table while it runs.
+**Fix**: save the definition first, then drop it with `CONCURRENTLY`. A plain `DROP INDEX` takes an ACCESS EXCLUSIVE lock, the strongest table lock, which blocks all reads and writes on the table while it runs.
 
 ```sql
 SELECT pg_get_indexdef('ix_name'::regclass);
@@ -172,9 +185,9 @@ If HOT fails because pages are full, a lower fillfactor (the share of each page 
 
 ## Also from the talk: connections
 
-**Cause**: Postgres runs one process per connection. Each new connection costs a fork, memory, authentication, and a cold cache before any row is read. The rate of new connections is the problem, not only the count.
+**Cause**: Postgres runs one process per connection. Each new connection costs a fork, memory, authentication, and a cold catalog cache before any row is touched. A high count is one problem. A high rate of new connections grinds the whole server. In the talk's test, persistent connections ran 215 thousand transactions a second at 0.09 ms each. Connecting per transaction ran 1,415, and half of each 14 ms transaction was the connect.
 
-**Signs in code**: a new `connect()` per request with no pool, or reconnecting with no delay.
+**Signs in code**: a new `connect()` per request with no pool, or reconnecting with no delay. A storm is many clients retrying at the same moment. The talk's backoff spreads them out: `delay = min(30, 0.1 * 2**attempt) * uniform(0.5, 1.5)`.
 
 **Fix**: create a pool once at startup and borrow connections from it. The talk shows psycopg2 `pool.ThreadedConnectionPool`, and says the same pattern applies in psycopg 3, HikariCP (Java), and `database/sql` (Go). Apps can use their own pool, PgBouncer, or both.
 
@@ -189,6 +202,6 @@ For a code review, give one entry per finding:
 - **Why it hurts**: one or two sentences, tied to connections where it fits.
 - **Fix**: the change, with code.
 
-For a live database, list findings worst first (critical, then warning, then info). Say which checks you could not run and why (missing role, old version, no `pg_stat_statements`).
+For a live database, list findings worst first (critical, then warning, then info). The health check also reports transaction id age (`age(datfrozenxid)` over 1 billion). Postgres shuts down to protect itself at about 2.1 billion, so treat that row as urgent. Say which checks you could not run and why (missing role, old version, no `pg_stat_statements`).
 
 Do not suggest raising `max_connections` as the fix. It hides the cause.
